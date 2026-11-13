@@ -10,6 +10,9 @@ from .inputs import (
     WorkflowIOImageInput,
     WorkflowIOVideoInput,
 )
+from .reframe import WorkflowIOImageReframe
+from .trim import WorkflowIOVideoTrim
+from .points import WorkflowIOPointSelector
 from .outputs import (
     WorkflowIOImageOutput,
     WorkflowIOVideoOutput,
@@ -26,6 +29,9 @@ NODE_CLASS_MAPPINGS = {
     "WorkflowIOSeedInput": WorkflowIOSeedInput,
     "WorkflowIOImageInput": WorkflowIOImageInput,
     "WorkflowIOVideoInput": WorkflowIOVideoInput,
+    "WorkflowIOImageReframe": WorkflowIOImageReframe,
+    "WorkflowIOVideoTrim": WorkflowIOVideoTrim,
+    "WorkflowIOPointSelector": WorkflowIOPointSelector,
     # Outputs
     "WorkflowIOImageOutput": WorkflowIOImageOutput,
     "WorkflowIOVideoOutput": WorkflowIOVideoOutput,
@@ -41,6 +47,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WorkflowIOSeedInput": "Workflow IO Seed Input",
     "WorkflowIOImageInput": "Workflow IO Image Input",
     "WorkflowIOVideoInput": "Workflow IO Video Input",
+    "WorkflowIOImageReframe": "Workflow IO Image Reframe",
+    "WorkflowIOVideoTrim": "Workflow IO Video Trim",
+    "WorkflowIOPointSelector": "Workflow IO Point Selector",
     "WorkflowIOImageOutput": "Workflow IO Image Output",
     "WorkflowIOVideoOutput": "Workflow IO Video Output",
     "WorkflowIO3DOutput": "Workflow IO 3D Output",

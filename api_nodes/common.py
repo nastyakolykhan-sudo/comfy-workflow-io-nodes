@@ -95,6 +95,13 @@ def meta_widgets(default_required: bool = True) -> dict:
     }
 
 
+def editor_run(extra_pnginfo) -> bool:
+    """True when a run was queued from the ComfyUI editor, which sends the UI
+    workflow along in extra_pnginfo. Nodes write their editor previews only
+    then, so deployed (API) runs don't spend time on files nobody sees."""
+    return isinstance(extra_pnginfo, dict) and "workflow" in extra_pnginfo
+
+
 # The metadata widget names, in the order they appear. The parser can iterate
 # these to strip metadata from a node's inputs and find the real payload field.
 META_FIELDS = ("param_name", "required", "description", "example", "advanced", "group", "order")

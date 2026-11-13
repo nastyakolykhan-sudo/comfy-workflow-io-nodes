@@ -11,6 +11,7 @@ including mid-workflow to expose an intermediate value as an API knob.
 """
 
 import os
+import re
 
 from .common import ANY_TYPE, CATEGORY_INPUT, meta_widgets
 
@@ -18,6 +19,57 @@ from .common import ANY_TYPE, CATEGORY_INPUT, meta_widgets
 class _WorkflowIOInputBase:
     CATEGORY = CATEGORY_INPUT
     FUNCTION = "run"
+
+
+# How the deployed app lets users set a value. Same term ComfyUI uses for its
+# own number widgets ("display": "number" | "slider"). The first option is the
+# default.
+NUMBER_DISPLAY_OPTIONS = ["number", "slider"]
+BOOL_DISPLAY_OPTIONS = ["on/off", "toggle"]
+
+
+def display_widget(options, tooltip):
+    """The ``display`` widget (Int, Float and Bool inputs).
+
+    Added after the shared metadata block, never before it: saved UI workflows
+    store widget values by position, so a widget inserted earlier would shift
+    every later value in existing workflows. Older workflows simply load with
+    the default (the first option).
+    """
+    return (list(options), {"default": options[0], "tooltip": tooltip})
+
+
+# Enum: one choice, or several. In multi-select, ``value`` holds the chosen
+# options separated by commas (the same separator as ``options``).
+ENUM_MODES = ["single", "multi-select"]
+
+
+def split_choices(text):
+    """Options or chosen values written on one line (comma) or one per line."""
+    seen, out = set(), []
+    for item in re.split(r"[,\n]", text or ""):
+        item = item.strip()
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+def number_display_widget():
+    return display_widget(
+        NUMBER_DISPLAY_OPTIONS,
+        "How users set this value in the deployed app: 'number' = a number box they type in "
+        "or step up/down, 'slider' = a slider they drag between min and max "
+        "(set min and max to the real range).",
+    )
+
+
+def bool_display_widget():
+    return display_widget(
+        BOOL_DISPLAY_OPTIONS,
+        "How users set this value in the deployed app: 'on/off' = two buttons, On and Off, "
+        "they pick between, 'toggle' = a switch they flip.",
+    )
 
 
 class WorkflowIOTextInput(_WorkflowIOInputBase):
@@ -41,7 +93,7 @@ class WorkflowIOTextInput(_WorkflowIOInputBase):
 
 
 class WorkflowIOIntInput(_WorkflowIOInputBase):
-    """Integer parameter with optional min/max/step."""
+    """Integer parameter with optional min/max/step and a number/slider display."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -55,6 +107,7 @@ class WorkflowIOIntInput(_WorkflowIOInputBase):
                                 "tooltip": "Maximum accepted value (documented + validated)."}),
                 "step": ("INT", {"default": 1, "min": 1, "tooltip": "Step hint for the caller UI."}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
+                "display": number_display_widget(),
             }
         }
 
@@ -66,7 +119,7 @@ class WorkflowIOIntInput(_WorkflowIOInputBase):
 
 
 class WorkflowIOFloatInput(_WorkflowIOInputBase):
-    """Float parameter with optional min/max/step."""
+    """Float parameter with optional min/max/step and a number/slider display."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -78,6 +131,7 @@ class WorkflowIOFloatInput(_WorkflowIOInputBase):
                 "max": ("FLOAT", {"default": 1.0, "tooltip": "Maximum accepted value."}),
                 "step": ("FLOAT", {"default": 0.01, "tooltip": "Step hint for the caller UI."}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
+                "display": number_display_widget(),
             }
         }
 
@@ -89,7 +143,7 @@ class WorkflowIOFloatInput(_WorkflowIOInputBase):
 
 
 class WorkflowIOBoolInput(_WorkflowIOInputBase):
-    """Boolean parameter."""
+    """Boolean parameter with an on/off or toggle display."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -98,6 +152,7 @@ class WorkflowIOBoolInput(_WorkflowIOInputBase):
                 "param_name": meta_widgets()["param_name"],
                 "value": ("BOOLEAN", {"default": False}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
+                "display": bool_display_widget(),
             }
         }
 
@@ -111,8 +166,12 @@ class WorkflowIOBoolInput(_WorkflowIOInputBase):
 class WorkflowIOEnumInput(_WorkflowIOInputBase):
     """String parameter restricted to a fixed set of options.
 
-    ``options`` is a newline-separated list; the parser turns it into the
-    api_config ``options`` allowlist. ``value`` holds the current/default choice.
+    ``options`` is the list of choices (comma-separated on one line, or one per
+    line); the parser turns it into the api_config ``options`` allowlist.
+    ``value`` holds the current/default choice. With ``mode`` multi-select the
+    caller may pick several: ``value`` is then the chosen options separated by
+    commas, and the output is them joined with ", " (for text and prompt inputs;
+    it can't drive a single-choice dropdown).
     """
 
     @classmethod
@@ -120,13 +179,21 @@ class WorkflowIOEnumInput(_WorkflowIOInputBase):
         return {
             "required": {
                 "param_name": meta_widgets()["param_name"],
-                "value": ("STRING", {"default": "", "tooltip": "Current/default choice. Should be one of the options."}),
+                "value": ("STRING", {"default": "", "tooltip": "Current/default choice. Should be one of the options. "
+                                                           "In multi-select: the default choices, separated by "
+                                                           "commas (may be empty)."}),
                 "options": ("STRING", {
                     "default": "",
                     "multiline": True,
                     "tooltip": "Allowed values, one per line. Becomes the API enum allowlist.",
                 }),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
+                # After the metadata block so saved workflows load unshifted.
+                "mode": (ENUM_MODES, {
+                    "default": "single",
+                    "tooltip": "'single' = users pick one option; 'multi-select' = users pick any number. "
+                               "Multi-select outputs the picks joined with ', ' (for text and prompt inputs).",
+                }),
             }
         }
 
@@ -135,7 +202,9 @@ class WorkflowIOEnumInput(_WorkflowIOInputBase):
     RETURN_TYPES = (ANY_TYPE,)
     RETURN_NAMES = ("value",)
 
-    def run(self, param_name, value, options="", **_meta):
+    def run(self, param_name, value, options="", mode="single", **_meta):
+        if mode == "multi-select":
+            return (", ".join(split_choices(value)),)
         return (value,)
 
 
@@ -182,7 +251,7 @@ class WorkflowIOImageInput(_WorkflowIOInputBase):
                     "default": "png,jpg,jpeg,webp",
                     "tooltip": "Comma-separated accepted upload formats (documentation + validation hint).",
                 }),
-                "max_size_mb": ("INT", {"default": 20, "min": 1, "max": 500,
+                "max_size_mb": ("INT", {"default": 100, "min": 1, "max": 500,
                                         "tooltip": "Maximum accepted upload size in MB."}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
             }
@@ -191,7 +260,7 @@ class WorkflowIOImageInput(_WorkflowIOInputBase):
     RETURN_TYPES = ("IMAGE", "MASK")
     RETURN_NAMES = ("image", "mask")
 
-    def run(self, param_name, value, accepted_formats="", max_size_mb=20, **_meta):
+    def run(self, param_name, value, accepted_formats="", max_size_mb=100, **_meta):
         import numpy as np
         import torch
         from PIL import Image, ImageOps
