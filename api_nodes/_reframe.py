@@ -157,6 +157,137 @@ def reframe(source, src_mask, cx, cy, w, h, rotation, padding_color, feathering)
     return out_image, out_mask
 
 
+# ---------------------------------------------------------------------------
+# Compositing back (ported from Image Reframe Composite)
+# ---------------------------------------------------------------------------
+
+PASTE_ORIGINAL = "original onto frame"
+PASTE_CROP = "crop onto original"
+
+
+def _resize(images, h, w):
+    if images.shape[1:3] == (h, w):
+        return images
+    return F.interpolate(images.movedim(-1, 1), size=(h, w), mode="bicubic",
+                         align_corners=False).movedim(1, -1).clamp(0, 1)
+
+
+def time_align(frames, count, src_fps, dst_fps):
+    """Pick, for each of `count` frames at dst_fps, the frame of `frames` (at src_fps)
+    shown at the same time; the last frame holds when `frames` is shorter."""
+    if frames.shape[0] == count or frames.shape[0] == 1:
+        return frames
+    src_fps, dst_fps = float(src_fps or 1), float(dst_fps or 1)
+    idx = [min(frames.shape[0] - 1, int(i * src_fps / dst_fps + 1e-6)) for i in range(count)]
+    return frames[idx]
+
+
+def composite(frame_image, original, crop_data, paste, feather, resize_source, mask=None):
+    """Paste across a reframe: the original onto frame_image (outpainting, output in
+    frame space) or frame_image back into the original (output in original space)."""
+    src_w, src_h = crop_data["source_width"], crop_data["source_height"]
+    if (original.shape[2], original.shape[1]) != (src_w, src_h):
+        raise ValueError(f"The original is {original.shape[2]}x{original.shape[1]}, but the frame was made from a "
+                         f"{src_w}x{src_h} source.")
+    device = frame_image.device
+    frame_image = frame_image.float()
+    channels = frame_image.shape[3]
+    batch = max(frame_image.shape[0], original.shape[0])
+    frame_image = _match_batch(frame_image, batch)
+    original = _match_batch(original, batch)[..., :channels].to(device=device, dtype=frame_image.dtype)
+    if paste == PASTE_CROP:
+        return _paste_crop(frame_image, original, crop_data, feather, resize_source, mask, batch)
+    return _paste_original(frame_image, original, crop_data, feather, resize_source, mask, batch)
+
+
+def _paste_crop(crop, original, d, feather, resize_source, mask, batch):
+    src_w, src_h = d["source_width"], d["source_height"]
+    cx, cy, w, h = d["center_x"], d["center_y"], d["width"], d["height"]
+    # Output in original space, scaled so the crop keeps its pixels unless resizing.
+    kx, ky = (1.0, 1.0) if resize_source else (crop.shape[2] / w, crop.shape[1] / h)
+    out_w, out_h = max(1, round(src_w * kx)), max(1, round(src_h * ky))
+    kx, ky = out_w / src_w, out_h / src_h
+    out = _resize(original, out_h, out_w).clone()
+
+    cos_a, sin_a = _cos_sin(d["angle"])
+    corners_x = [cx + cos_a * dx + sin_a * dy for dx in (-w / 2, w / 2) for dy in (-h / 2, h / 2)]
+    corners_y = [cy - sin_a * dx + cos_a * dy for dx in (-w / 2, w / 2) for dy in (-h / 2, h / 2)]
+    x0 = max(0, math.floor(min(corners_x) * kx))
+    x1 = min(out_w, math.ceil(max(corners_x) * kx))
+    y0 = max(0, math.floor(min(corners_y) * ky))
+    y1 = min(out_h, math.ceil(max(corners_y) * ky))
+    if x1 <= x0 or y1 <= y0:
+        return out
+
+    device = crop.device
+    px = (torch.arange(x0, x1, device=device, dtype=torch.float32) + 0.5) / kx - cx
+    py = (torch.arange(y0, y1, device=device, dtype=torch.float32) + 0.5) / ky - cy
+    py, px = torch.meshgrid(py, px, indexing="ij")
+    dx = cos_a * px - sin_a * py
+    dy = sin_a * px + cos_a * py
+    grid = torch.stack((dx / (w / 2), dy / (h / 2)), dim=-1).unsqueeze(0)
+
+    edge_distance = torch.minimum(w / 2 - dx.abs(), h / 2 - dy.abs()) * min(kx, ky)
+    if feather > 0:
+        alpha = (edge_distance / feather).clamp(0, 1)
+    else:
+        alpha = (edge_distance + 0.5).clamp(0, 1)
+    alpha = alpha.expand(batch, -1, -1)
+
+    if mask is not None:
+        m = normalize_mask(mask, batch, mask.shape[-2], mask.shape[-1]).to(device)
+        alpha = alpha * _sample(m.unsqueeze(1), grid, "bilinear", "border")[:, 0]
+
+    alpha = alpha.unsqueeze(-1)
+    for i in range(0, batch, CHUNK):
+        pasted = _sample(crop[i:i + CHUNK].movedim(-1, 1), grid, "bicubic", "border").movedim(1, -1).clamp(0, 1)
+        region = out[i:i + CHUNK, y0:y1, x0:x1, :]
+        a = alpha[i:i + CHUNK]
+        out[i:i + CHUNK, y0:y1, x0:x1, :] = region * (1 - a) + pasted * a
+    return out
+
+
+def _paste_original(frame_image, original, d, feather, resize_source, mask, batch):
+    src_w, src_h = d["source_width"], d["source_height"]
+    w, h = d["width"], d["height"]
+    device = frame_image.device
+
+    if resize_source:
+        out_h, out_w = frame_image.shape[1], frame_image.shape[2]
+    else:
+        out_h, out_w = h, w
+        frame_image = _resize(frame_image, h, w)
+
+    sx, sy = _frame_to_source(d["center_x"], d["center_y"], w, h, d["angle"], out_w, out_h, device)
+    grid = _source_grid(sx, sy, src_w, src_h)
+
+    # Distance inside the original to each edge that borders padding in this
+    # frame, in output pixels; edges cut off by the frame stay hard.
+    k = min(out_w / w, out_h / h)
+    edges = [(sx, sx < 0), (src_w - sx, sx > src_w), (sy, sy < 0), (src_h - sy, sy > src_h)]
+    distance = torch.full_like(sx, float("inf"))
+    for dist, beyond in edges:
+        if beyond.any():
+            distance = torch.minimum(distance, dist * k)
+    inside = ((sx >= 0) & (sx <= src_w) & (sy >= 0) & (sy <= src_h)).float()
+    if feather > 0:
+        alpha = (distance / feather).clamp(0, 1) * inside
+    else:
+        alpha = (distance + 0.5).clamp(0, 1) * inside
+    alpha = alpha.expand(batch, -1, -1)
+
+    if mask is not None:
+        alpha = alpha * normalize_mask(mask, batch, out_h, out_w).to(device)
+
+    alpha = alpha.unsqueeze(-1)
+    out = torch.empty((batch, out_h, out_w, frame_image.shape[3]), device=device, dtype=frame_image.dtype)
+    for i in range(0, batch, CHUNK):
+        pasted = _sample(original[i:i + CHUNK].movedim(-1, 1), grid, "bicubic", "border").movedim(1, -1).clamp(0, 1)
+        a = alpha[i:i + CHUNK]
+        out[i:i + CHUNK] = frame_image[i:i + CHUNK] * (1 - a) + pasted * a
+    return out
+
+
 def to_video(images, frame_rate, audio=None):
     """A VIDEO from frames. Odd sizes lose their last row/column (encoders need even)."""
     from comfy_api.input_impl import VideoFromComponents

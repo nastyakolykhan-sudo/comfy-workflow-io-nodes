@@ -1,12 +1,26 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-// Viewport for Workflow IO Image Reframe. Same frame editing as Image Reframe
+// Viewport for Workflow IO Image/Video Reframe, and the image/video mode switch it
+// shares with Workflow IO Image/Video Reframe Composite. Same frame editing as Image Reframe
 // (ComfyUI-MaskAspectCrop), but the picture comes from the connected image or
 // video after a run; a video gets a timeline (scrub to any frame) and a play
 // button, and the frame can be adjusted while it plays.
 
-const NODE_CLASS = "WorkflowIOImageReframe";
+const NODE_CLASS = "WorkflowIOImageVideoReframe";
+const COMPOSITE_CLASS = "WorkflowIOImageVideoReframeComposite";
+// Sockets that follow the mode widget: fixed name -> [image-mode label, video-mode label].
+// Names never change (so saved links survive loading); the label and type do.
+const MODE_SOCKETS = {
+    [NODE_CLASS]: {
+        inputs: { source: ["image", "video"] },
+        outputs: { original: ["original_image", "original_video"], cropped: ["cropped_image", "cropped_video"] },
+    },
+    [COMPOSITE_CLASS]: {
+        inputs: { frame: ["frame_image", "frame_video"], original: ["original_image", "original_video"] },
+        outputs: { result: ["image", "video"] },
+    },
+};
 const ASPECT_RATIOS = { "16:9": 16 / 9, "4:3": 4 / 3, "1:1": 1, "3:4": 3 / 4, "9:16": 9 / 16, "21:9": 21 / 9 };
 const FRAME_WIDGETS = ["center_x", "center_y", "frame_width", "frame_height", "rotation"];
 const PADDING_COLORS = { grey: "#808080", black: "#000000", white: "#ffffff", green: "#00ff00" };
@@ -27,6 +41,47 @@ const CURSORS = {
 const widget = (node, name) => node.widgets?.find((w) => w.name === name);
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
 const even = (v) => Math.max(2, v - (v % 2));
+
+// Labels and types the mode's sockets: IMAGE sockets labelled *_image in image mode,
+// VIDEO sockets labelled *_video in video mode. When the user switches mode, links of
+// the other type are dropped.
+function applyMode(node, disconnect = false) {
+    const spec = MODE_SOCKETS[node.comfyClass ?? node.type];
+    if (!spec) return;
+    const video = widget(node, "mode")?.value === "video";
+    const type = video ? "VIDEO" : "IMAGE";
+    const label = (slot, labels) => {
+        slot.label = labels[video ? 1 : 0];
+        slot.localized_name = slot.label;
+    };
+    (node.inputs ?? []).forEach((slot, i) => {
+        const labels = spec.inputs[slot.name];
+        if (!labels) return;
+        if (disconnect && slot.type !== type && slot.link != null) node.disconnectInput(i);
+        slot.type = type;
+        label(slot, labels);
+    });
+    (node.outputs ?? []).forEach((slot, i) => {
+        const labels = spec.outputs[slot.name];
+        if (!labels) return;
+        if (disconnect && slot.type !== type && slot.links?.length) node.disconnectOutput(i);
+        slot.type = type;
+        label(slot, labels);
+    });
+    node.setDirtyCanvas(true, true);
+}
+
+function hookMode(node, after) {
+    const w = widget(node, "mode");
+    if (!w) return;
+    const callback = w.callback;
+    w.callback = function () {
+        const r = callback?.apply(this, arguments);
+        applyMode(node, true);
+        after?.();
+        return r;
+    };
+}
 
 // Geometry matches _reframe.py: the frame (cx, cy, w, h) lives in source pixels and
 // the image is rotated by `rotation` degrees (clockwise, y-down) behind the upright frame.
@@ -106,7 +161,7 @@ class ReframeEditor {
     }
 
     inputLinked() {
-        return (this.node.inputs ?? []).some((i) => (i.name === "image" || i.name === "video") && i.link != null);
+        return (this.node.inputs ?? []).some((i) => i.name === "source" && i.link != null);
     }
 
     get angleRad() {
@@ -613,8 +668,24 @@ class ReframeEditor {
 }
 
 app.registerExtension({
-    name: "workflow_io.ImageReframe",
+    name: "workflow_io.ImageVideoReframe",
     beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name === COMPOSITE_CLASS) {
+            const created = nodeType.prototype.onNodeCreated;
+            nodeType.prototype.onNodeCreated = function () {
+                const r = created?.apply(this, arguments);
+                hookMode(this);
+                applyMode(this);
+                return r;
+            };
+            const configured = nodeType.prototype.onConfigure;
+            nodeType.prototype.onConfigure = function () {
+                const r = configured?.apply(this, arguments);
+                applyMode(this);
+                return r;
+            };
+            return;
+        }
         if (nodeData.name !== NODE_CLASS) return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
@@ -637,6 +708,8 @@ app.registerExtension({
             };
             for (const name of [...FRAME_WIDGETS, "padding_color"]) hook(name);
             hook("aspect_ratio", () => editor.applyAspect());
+            hookMode(this, () => editor.refreshSource());
+            applyMode(this);
 
             const reset = this.addWidget("button", "Reset", null, () => {
                 editor.resetAll();
@@ -672,6 +745,7 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const r = onConfigure?.apply(this, arguments);
+            applyMode(this);
             this.reframeEditor?.refreshSource();
             return r;
         };

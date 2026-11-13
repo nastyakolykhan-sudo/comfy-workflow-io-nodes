@@ -21,6 +21,8 @@ const CANVAS_H = STRIP_TOP + STRIP_H + MARKER_ZONE + RULER_H;
 
 const widget = (node, name) => node.widgets?.find((w) => w.name === name);
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+// 1.50s, or 1:02.50 from a minute on.
+const fmtTime = (t) => t < 60 ? `${t.toFixed(2)}s` : `${Math.floor(t / 60)}:${(t % 60).toFixed(2).padStart(5, "0")}`;
 
 function el(tag, style = {}, props = {}) {
     const e = document.createElement(tag);
@@ -91,8 +93,7 @@ class VideoTrimEditor {
 
         this.footer = el("div", { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" });
         this.readout = el("div", { flex: "1 1 auto", font: "12px monospace", lineHeight: "1.6" });
-        this.keyButton = el("button", BUTTON_STYLE, { textContent: "Add keyframe" });
-        this.footer.append(this.readout, this.keyButton);
+        this.footer.append(this.readout);
 
         this.element.append(this.title, this.previewBox, this.timelineRow, this.footer);
 
@@ -101,9 +102,8 @@ class VideoTrimEditor {
         this.canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
         this.canvas.addEventListener("pointercancel", (e) => this.onPointerUp(e));
         this.canvas.addEventListener("keydown", (e) => this.onKeyDown(e));
-        for (const b of [this.playButton, this.keyButton]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        this.playButton.addEventListener("pointerdown", (e) => e.stopPropagation());
         this.playButton.addEventListener("click", () => this.togglePlay());
-        this.keyButton.addEventListener("click", () => this.toggleKeyframe());
         this.video.addEventListener("loadeddata", () => this.showPreview());
         this.video.addEventListener("error", () => {
             if (!this.video.getAttribute("src")) return;
@@ -122,13 +122,16 @@ class VideoTrimEditor {
         const v = widget(this.node, "end_frame")?.value || 0;
         return v <= 0 ? this.total : clamp(v, this.start, this.total);
     }
-    // "trim + keyframe" mode adds the keyframe; in "trim" mode it is ignored (as the node does).
+    // "trim + keyframe" mode always has a keyframe (0 = the start frame, as the node reads
+    // it); in "trim" mode there is none.
     get keyframeMode() { return widget(this.node, "mode")?.value === "trim + keyframe"; }
     get keyframe() {
-        if (!this.keyframeMode) return 0;
+        if (!this.keyframeMode || !this.total) return 0;
         const v = widget(this.node, "keyframe")?.value || 0;
-        return v <= 0 ? 0 : clamp(v, 1, this.total);
+        return v <= 0 ? this.start : clamp(v, this.start, this.end);
     }
+
+    frameTimeText(f) { return this.info?.fps ? fmtTime((f - 1) / this.info.fps) : ""; }
 
     setWidget(name, value) {
         const w = widget(this.node, name);
@@ -270,7 +273,7 @@ class VideoTrimEditor {
         const f = this.markerFrame(name);
         const label = { playhead: "Frame", start: "Start", end: "End", keyframe: "Keyframe" }[name];
         this.frameLabel.style.display = "block";
-        this.frameLabel.textContent = `${label} ${f}`;
+        this.frameLabel.textContent = `${label} ${f} · ${this.frameTimeText(f)}`;
         this.frameLabel.style.color = name === "keyframe" ? KEYFRAME_COLOR : name === "playhead" ? "#fff" : TRIM_COLOR;
         if (this.playing) return;
         if (this.video.readyState >= 1) this.video.currentTime = this.frameTime(f);
@@ -300,7 +303,7 @@ class VideoTrimEditor {
             }
             this.updateReadout();
             this.draw();
-            this.frameLabel.textContent = `Frame ${this.playhead}`;
+            this.frameLabel.textContent = `Frame ${this.playhead} · ${this.frameTimeText(this.playhead)}`;
             requestAnimationFrame(tick);
         };
         requestAnimationFrame(tick);
@@ -315,36 +318,27 @@ class VideoTrimEditor {
         this.showPreview();
     }
 
-    // Shows the keyframe field and button only in "trim + keyframe" mode; leaving that
-    // mode clears the keyframe so the saved value stays at the default.
+    // Shows the keyframe field only in "trim + keyframe" mode. Switching to that mode puts
+    // the keyframe at the playhead (as if "add keyframe" had been pressed); leaving it clears
+    // the keyframe so the saved value stays at the default.
     syncMode() {
         const on = this.keyframeMode;
         const kw = widget(this.node, "keyframe");
         if (kw) {
             if (!on && kw.value) kw.value = 0;
+            if (on && this.wasKeyframeMode === false && this.info) {
+                const f = clamp(this.playhead, this.start, this.end);
+                kw.value = f === this.start ? 0 : f;
+                this.focus = "keyframe";
+            }
             kw.hidden = !on;
         }
         if (!on && this.focus === "keyframe") this.focus = "playhead";
-        this.keyButton.style.display = on ? "" : "none";
-        this.changed();
-    }
-
-    toggleKeyframe() {
-        if (!this.info || !this.keyframeMode) return;
-        if (this.keyframe) {
-            this.setWidget("keyframe", 0);
-            if (this.focus === "keyframe") this.focus = "playhead";
-        } else {
-            // Added at the playhead (or the nearest trim edge), then drag it.
-            this.setWidget("keyframe", clamp(this.playhead, this.start, this.end));
-            this.focus = "keyframe";
-        }
+        this.wasKeyframeMode = on;
         this.changed();
     }
 
     updateReadout() {
-        this.keyButton.textContent = this.keyframe ? "Remove keyframe" : "Add keyframe";
-        this.keyButton.style.borderColor = this.keyframe ? "#444" : KEYFRAME_COLOR;
         this.playButton.disabled = !this.info;
         this.playButton.style.opacity = this.info ? "1" : "0.35";
         if (!this.info) {
@@ -365,14 +359,14 @@ class VideoTrimEditor {
             innerHTML: `<span style="color:#888">${label}</span> <span style="color:${color}">${value}</span>`,
         });
         this.readout.append(
-            item("Start Frame:", this.start, "#fff"),
-            item("End Frame:", this.end, "#fff"),
+            item("Start Frame:", `${this.start} <span style="color:#777">(${this.frameTimeText(this.start)})</span>`, "#fff"),
+            item("End Frame:", `${this.end} <span style="color:#777">(${this.frameTimeText(this.end)})</span>`, "#fff"),
             item("Duration:", `${n} Frames <span style="color:#777">(${(n / fps).toFixed(1)}s @ ${fpsText}fps)</span>`, "#fff"),
         );
         if (this.keyframeMode) {
-            this.readout.append(item("Keyframe:", this.keyframe
-                ? `${this.keyframe} <span style="color:#777">(index ${this.keyframe - this.start} in trim)</span>`
-                : "none", this.keyframe ? KEYFRAME_COLOR : "#666"));
+            this.readout.append(item("Keyframe:",
+                `${this.keyframe} <span style="color:#777">(${this.frameTimeText(this.keyframe)}, index ` +
+                `${this.keyframe - this.start} in trim)</span>`, KEYFRAME_COLOR));
         }
     }
 
@@ -657,7 +651,10 @@ app.registerExtension({
             });
             view.serialize = false;
             this.setSize([Math.max(this.size[0], 520), Math.max(this.size[1], 820)]);
-            editor.syncMode();
+            // A loaded node gets its saved values right after creation, and the frontend
+            // skips hidden widgets when restoring them, so hide the keyframe field only
+            // afterwards (a microtask later); onConfigure syncs loaded nodes first.
+            queueMicrotask(() => editor.syncMode());
             requestAnimationFrame(() => editor.refreshSource());
             return result;
         };

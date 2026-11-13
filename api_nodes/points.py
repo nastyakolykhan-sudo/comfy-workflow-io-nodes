@@ -17,13 +17,13 @@ Points are pixel coordinates in the image passing through, as JSON:
 
 import json
 
-from .common import CATEGORY_INPUT, editor_run, meta_widgets
+from .common import CATEGORY_INPUT, editor_run
 
 POINTS_TOOLTIP = ('{kind} points in pixels of the image, as JSON: [{{"x": 120, "y": 340}}, ...]. '
                   'Set by clicking in the viewport (and by the deployed app\'s point tool). Empty = none.')
 
 
-def parse_points(text, kind, param_name, width=None, height=None):
+def parse_points(text, kind, width=None, height=None):
     """[{"x": int, "y": int}, ...] from JSON; also accepts [[x, y], ...]. Points
     outside the image are moved onto its edge."""
     text = (text or "").strip()
@@ -32,12 +32,12 @@ def parse_points(text, kind, param_name, width=None, height=None):
     try:
         raw = json.loads(text)
     except ValueError as exc:
-        raise ValueError(f"Workflow IO Point Selector '{param_name}': {kind} points are not valid JSON ({exc}). "
+        raise ValueError(f"Workflow IO Point Selector: {kind} points are not valid JSON ({exc}). "
                          f'Expected [{{"x": 120, "y": 340}}, ...].') from None
     if isinstance(raw, dict):
         raw = [raw]
     if not isinstance(raw, list):
-        raise ValueError(f"Workflow IO Point Selector '{param_name}': {kind} points must be a JSON list.")
+        raise ValueError(f"Workflow IO Point Selector: {kind} points must be a JSON list.")
     points = []
     for item in raw:
         if isinstance(item, dict) and "x" in item and "y" in item:
@@ -45,7 +45,7 @@ def parse_points(text, kind, param_name, width=None, height=None):
         elif isinstance(item, (list, tuple)) and len(item) >= 2:
             x, y = item[0], item[1]
         else:
-            raise ValueError(f"Workflow IO Point Selector '{param_name}': can't read {kind} point {item!r}; "
+            raise ValueError(f"Workflow IO Point Selector: can't read {kind} point {item!r}; "
                              f'use {{"x": 120, "y": 340}}.')
         x, y = int(round(float(x))), int(round(float(y)))
         if width:
@@ -62,15 +62,12 @@ class WorkflowIOPointSelector:
 
     @classmethod
     def INPUT_TYPES(cls):
-        meta = meta_widgets(default_required=False)
         return {
             "required": {
-                "param_name": meta["param_name"],
                 "image": ("IMAGE", {"tooltip": "The image to place points on (for a video: its keyframe). "
                                                "A batch uses the first image."}),
                 "positive_points": ("STRING", {"default": "", "tooltip": POINTS_TOOLTIP.format(kind="Positive")}),
                 "negative_points": ("STRING", {"default": "", "tooltip": POINTS_TOOLTIP.format(kind="Negative")}),
-                **{k: v for k, v in meta.items() if k != "param_name"},
             },
             "hidden": {
                 "node_id": "UNIQUE_ID",
@@ -91,11 +88,10 @@ class WorkflowIOPointSelector:
         "(or right-click) to add negative ones. In a deployed workflow the app shows its own point tool."
     )
 
-    def run(self, param_name, image, positive_points, negative_points, node_id=None, extra_pnginfo=None,
-            **_meta):
+    def run(self, image, positive_points, negative_points, node_id=None, extra_pnginfo=None):
         height, width = int(image.shape[1]), int(image.shape[2])
-        positive = parse_points(positive_points, "positive", param_name, width, height)
-        negative = parse_points(negative_points, "negative", param_name, width, height)
+        positive = parse_points(positive_points, "positive", width, height)
+        negative = parse_points(negative_points, "negative", width, height)
 
         ui = {"points_source_size": [width, height]}
         if editor_run(extra_pnginfo):
