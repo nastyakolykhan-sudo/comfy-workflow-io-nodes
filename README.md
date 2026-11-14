@@ -189,13 +189,15 @@ through this node.
   image are moved onto its edge.
 - **Outputs:** `image` (passed through), `positive_coords`,
   `negative_coords`: JSON in KJNodes Points Editor's format, which core SAM3
-  Detect (`positive_coords` / `negative_coords`), SAM2 and SeC
-  (`positive_points` / `coordinates_positive` ...) read. No points → `[]`.
+  Detect (`positive_coords` / `negative_coords`) and SAM2
+  (`coordinates_positive` / `coordinates_negative`) read. No points → `[]`.
 - **Video segmentation:** pass the keyframe (Video Trim in `trim + keyframe`
-  mode) through this node and give the points to a tracker that takes an
-  annotation frame: SeC (`annotation_frame_idx` = `keyframe_index`,
-  `tracking_direction` bidirectional). Core SAM3 Video Track and SAM2's main
-  node always start from the first frame of the frames they get.
+  mode) through this node, segment that frame (SAM3 Detect), then track from
+  it with AutoMatte: SAM3 Track From Keyframe (ComfyUI-AutoMatte), which takes
+  `keyframe_index` and tracks forward and backward with core SAM3. Core SAM3
+  Video Track and SAM2's main node always start from the first frame of the
+  frames they get. (SeC takes an annotation frame, but its model bundles
+  Qwen2.5-3B under a research-only, non-commercial licence.)
 - **For the app:** show the point tool on whatever reaches `image`; points
   are in that image's pixels, so start empty for each upload.
 
