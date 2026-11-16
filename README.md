@@ -213,13 +213,39 @@ runs skip it.
 | Workflow IO Image Output | IMAGE | full saver (png/jpg/webp); passthrough IMAGE |
 | Workflow IO Video Output | VIDEO | saves via `comfy_api`'s `VideoInput.save_to` (SaveVideo-style, audio preserved); passthrough VIDEO; `codec` (auto/h264/av1/prores, ComfyUI 0.44+) and a wirable `video_format` string (MP4, ProRes, WebM, MKV, auto) that overrides format + codec — ProRes is written as MOV (422 HQ, or 4444 for 4:4:4/alpha sources) |
 | Workflow IO 3D Output | FILE_3D (GLB, glTF, FBX, OBJ, STL) | saves in the file's own format via `File3D.save_to` (Save 3D-style), reported under the `3d` UI key; passthrough FILE_3D |
+| Workflow IO Text Output | STRING | saves a UTF-8 `.txt`, reported under the `files` UI key (deployments return it as a `file` output) and as `text`; shows the text on the node after a run; passthrough STRING; `action` / `fills` make it a step the app runs on its own (below) |
 
 Output nodes are `OUTPUT_NODE` and pass their media through, so they can sit
 mid-graph without dead-ending a branch.
 
 > **MVP scope note:** Image and video input/output are fully implemented, both
-> preserving audio end-to-end via the native VIDEO type. Text/Audio/File
-> output nodes are planned fast-follows.
+> preserving audio end-to-end via the native VIDEO type. Text output is in;
+> Audio/File output nodes are planned fast-follows.
+
+#### Actions: a step the app runs before the real run (Suggest prompt)
+
+A Workflow IO Text Output with `action` set (a button label, e.g. `Suggest
+prompt`) and `fills` (the `param_name` of an input, e.g. `Prompt`) is a step the
+app runs on its own. Example: a video edit whose prompt an LLM can write from the
+clip and the reference. The user presses **Suggest prompt**, the written prompt
+appears in the Prompt field, they read it, change it if they like, and press
+Generate: the real run uses the field as it is, so what they see is what runs.
+
+How the app runs it:
+
+1. **The action** (button pressed): send the workflow trimmed to that Text Output
+   and every node that feeds it. ComfyUI runs every output node it is given, and
+   deployments drop ComfyUI's `partial_execution_targets`, so trimming is how
+   only the suggestion branch runs (no render). Send values only for the inputs
+   left in the trimmed workflow; enable the button once those are filled.
+2. **The result**: the job returns one `file` output, `<output_name>.txt` (UTF-8);
+   its content goes into the input named by `fills`.
+3. **The real run**: send the workflow without its action outputs, with the
+   input as the user left it. Nodes that only fed the action don't run.
+
+[`tools/action_graph.py`](tools/action_graph.py) does both trims and lists each
+action's inputs (`python tools/action_graph.py workflow_api.json [--write]`).
+With `action` empty, the text is simply returned with the normal run.
 
 ## Exported-JSON → api_config contract
 
@@ -237,6 +263,10 @@ WorkflowIOFloatInput node "5"  ->  api_config.mappings["strength"] = {
     min: 0, max: 1, step: 0.05, display: "slider" }   # "number" when absent
 
 WorkflowIOImageOutput node "8"  ->  api_config.output_nodes = ["8", ...]
+
+WorkflowIOTextOutput node "9" with action  ->  api_config.actions["Suggest prompt"] = {
+    node_id: "9", fills: "prompt", inputs: ["video", "reference_image"] }
+    # left out of output_nodes and of the normal run's workflow
 ```
 
 Because `output_nodes` is emitted as an allowlist (not a rename map), the runner

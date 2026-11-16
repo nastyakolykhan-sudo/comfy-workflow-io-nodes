@@ -17,6 +17,7 @@ from .outputs import (
     WorkflowIOImageOutput,
     WorkflowIOVideoOutput,
     WorkflowIO3DOutput,
+    WorkflowIOTextOutput,
 )
 
 NODE_CLASS_MAPPINGS = {
@@ -38,6 +39,7 @@ NODE_CLASS_MAPPINGS = {
     "WorkflowIOImageOutput": WorkflowIOImageOutput,
     "WorkflowIOVideoOutput": WorkflowIOVideoOutput,
     "WorkflowIO3DOutput": WorkflowIO3DOutput,
+    "WorkflowIOTextOutput": WorkflowIOTextOutput,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -57,6 +59,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "WorkflowIOImageOutput": "Workflow IO Image Output",
     "WorkflowIOVideoOutput": "Workflow IO Video Output",
     "WorkflowIO3DOutput": "Workflow IO 3D Output",
+    "WorkflowIOTextOutput": "Workflow IO Text Output",
 }
 
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS"]

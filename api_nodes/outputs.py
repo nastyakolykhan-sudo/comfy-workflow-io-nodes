@@ -279,3 +279,74 @@ class WorkflowIO3DOutput:
             "ui": {"3d": [{"filename": fname, "subfolder": "", "type": "output"}]},
             "result": (model_3d,),
         }
+
+
+class WorkflowIOTextOutput:
+    """Return text to the caller (a written prompt, a caption, a description).
+
+    Saves the text as a UTF-8 ``.txt`` file in the output folder and reports it
+    under the ``files`` UI key, so a deployment returns it like any other output
+    file; the text also comes back under ``text``, and the editor shows it on the
+    node.
+
+    ``action`` and ``fills`` make it a step the app can run on its own, before the
+    real run: ``action`` is the button label (e.g. "Suggest prompt"), ``fills``
+    the ``param_name`` of the input the text goes into (e.g. "Prompt"). The app
+    runs only the nodes that feed this output, puts the text in that input for
+    the user to read or edit, and the real run then uses the input as it is.
+    With ``action`` empty, the text is returned with the normal run.
+    """
+
+    CATEGORY = CATEGORY_OUTPUT
+    FUNCTION = "run"
+    OUTPUT_NODE = True
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("text",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "text": ("STRING", {"forceInput": True, "tooltip": "The text to return."}),
+                "output_name": ("STRING", {
+                    "default": "text",
+                    "tooltip": "API output name/key. Also the fallback filename if no template/wire is set.",
+                }),
+                "filename_template": ("STRING", {"default": "", "tooltip": "Static filename (no extension)."}),
+                "include": ("BOOLEAN", {"default": True,
+                                        "tooltip": "If false, this output is produced in-graph but NOT returned to the caller."}),
+                "action": ("STRING", {
+                    "default": "",
+                    "tooltip": "Button label in the deployed app (e.g. 'Suggest prompt'). Set, the app runs only the "
+                               "nodes that feed this output when the button is pressed, and leaves them out of the "
+                               "normal run. Empty = the text is returned with the normal run.",
+                }),
+                "fills": ("STRING", {
+                    "default": "",
+                    "tooltip": "param_name of the input the text goes into (e.g. 'Prompt'), where the user can read "
+                               "and edit it before the real run. Needs action.",
+                }),
+            },
+            "optional": {
+                "filename": ("STRING", {"forceInput": True,
+                                        "tooltip": "Dynamic filename (no extension). Takes priority."}),
+            },
+        }
+
+    def run(self, text, output_name, filename_template, include, action="", fills="", filename=""):
+        text = "" if text is None else str(text)
+        if not include:
+            return {"ui": {"files": [], "text": []}, "result": (text,)}
+
+        import folder_paths
+
+        out_dir = folder_paths.get_output_directory()
+        basename = _resolve_basename(filename, filename_template, output_name)
+        fname, fpath = _output_path(out_dir, basename, "txt")
+        with open(fpath, "w", encoding="utf-8") as f:
+            f.write(text)
+
+        return {
+            "ui": {"files": [{"filename": fname, "subfolder": "", "type": "output"}], "text": [text]},
+            "result": (text,),
+        }
