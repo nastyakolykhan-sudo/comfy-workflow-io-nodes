@@ -34,7 +34,8 @@ def display_widget(options, tooltip):
     Added after the shared metadata block, never before it: saved UI workflows
     store widget values by position, so a widget inserted earlier would shift
     every later value in existing workflows. Older workflows simply load with
-    the default (the first option).
+    the default (the first option). Declared optional: API workflows saved before
+    it existed don't carry it, and ComfyUI rejects a run missing a required input.
     """
     return (list(options), {"default": options[0], "tooltip": tooltip})
 
@@ -107,8 +108,9 @@ class WorkflowIOIntInput(_WorkflowIOInputBase):
                                 "tooltip": "Maximum accepted value (documented + validated)."}),
                 "step": ("INT", {"default": 1, "min": 1, "tooltip": "Step hint for the caller UI."}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
-                "display": number_display_widget(),
-            }
+            },
+            # Optional, so API workflows saved before it existed still validate.
+            "optional": {"display": number_display_widget()},
         }
 
     RETURN_TYPES = ("INT",)
@@ -131,8 +133,9 @@ class WorkflowIOFloatInput(_WorkflowIOInputBase):
                 "max": ("FLOAT", {"default": 1.0, "tooltip": "Maximum accepted value."}),
                 "step": ("FLOAT", {"default": 0.01, "tooltip": "Step hint for the caller UI."}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
-                "display": number_display_widget(),
-            }
+            },
+            # Optional, so API workflows saved before it existed still validate.
+            "optional": {"display": number_display_widget()},
         }
 
     RETURN_TYPES = ("FLOAT",)
@@ -152,8 +155,9 @@ class WorkflowIOBoolInput(_WorkflowIOInputBase):
                 "param_name": meta_widgets()["param_name"],
                 "value": ("BOOLEAN", {"default": False}),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
-                "display": bool_display_widget(),
-            }
+            },
+            # Optional, so API workflows saved before it existed still validate.
+            "optional": {"display": bool_display_widget()},
         }
 
     RETURN_TYPES = ("BOOLEAN",)
@@ -188,13 +192,16 @@ class WorkflowIOEnumInput(_WorkflowIOInputBase):
                     "tooltip": "Allowed values, one per line. Becomes the API enum allowlist.",
                 }),
                 **{k: v for k, v in meta_widgets().items() if k != "param_name"},
-                # After the metadata block so saved workflows load unshifted.
+            },
+            # After the metadata block so saved workflows load unshifted; optional so API
+            # workflows saved before it existed still validate.
+            "optional": {
                 "mode": (ENUM_MODES, {
                     "default": "single",
                     "tooltip": "'single' = users pick one option; 'multi-select' = users pick any number. "
                                "Multi-select outputs the picks joined with ', ' (for text and prompt inputs).",
                 }),
-            }
+            },
         }
 
     # Wildcard so the choice can drive COMBO inputs (sampler_name, scheduler,

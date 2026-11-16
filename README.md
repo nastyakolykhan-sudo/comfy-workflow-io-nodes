@@ -35,14 +35,15 @@ Every input node shares this metadata block: `param_name` (the API key),
 `required`, `description`, `example`, `advanced`, `group`, `order`.
 
 Int, Float and Bool inputs also carry `display`, after the metadata block: how
-the deployed app shows the input to users.
+the deployed app shows the input to users. It is optional: API workflows saved
+before it existed leave it out and get the default.
 
 | Input | `display` options (first = default) |
 |-------|-------------------------------------|
 | Int, Float | `number` = a number box they type in or step up/down; `slider` = a slider they drag between `min` and `max` (give a slider a real range) |
 | Bool | `on/off` = two buttons, On and Off, they pick between; `toggle` = a switch they flip |
 
-Enum inputs carry `mode` in the same place: `single` (default) = users pick
+Enum inputs carry `mode` in the same place (also optional): `single` (default) = users pick
 one option; `multi-select` = users pick any number. In multi-select `value` is
 the chosen options separated by commas (`Plant, Lamp`; empty = nothing picked),
 the app sends its picks the same way, and the node outputs them joined with

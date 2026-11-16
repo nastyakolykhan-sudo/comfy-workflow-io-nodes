@@ -135,7 +135,10 @@ class WorkflowIOVideoTrim:
                 ui = {
                     "trim_video": [video_ref],
                     "trim_strip": [strip_ref] if strip_ref else [],
-                    "trim_info": [{"frames": total, "fps": float(fps), "width": int(width), "height": int(height),
+                    # The frames' own size: a phone clip's rotation tag is applied (get_dimensions
+                    # gives the stored size, which file_frames needs before it rotates).
+                    "trim_info": [{"frames": total, "fps": float(fps), "width": int(key_image.shape[2]),
+                                   "height": int(key_image.shape[1]),
                                    "strip_count": strip_count, "preview_frames": written}],
                 }
             except Exception as exc:  # the editor's preview must never fail a run
